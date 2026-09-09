@@ -3055,6 +3055,21 @@ static int kvm_init(AccelState *as, MachineState *ms)
         goto err;
     }
 
+    if (s->cstate_policy >= 0) {
+        if (!kvm_vm_check_extension(s, KVM_CAP_CSTATE_POLICY)) {
+            error_report("KVM_CAP_CSTATE_POLICY not supported by kernel");
+            ret = -EINVAL;
+            goto err;
+        }
+        ret = kvm_vm_enable_cap(s, KVM_CAP_CSTATE_POLICY, 0,
+                                s->cstate_policy);
+        if (ret < 0) {
+            error_report("Failed to set cstate-policy to %d: %s",
+                         s->cstate_policy, strerror(-ret));
+            goto err;
+        }
+    }
+
     kvm_supported_memory_attributes = kvm_vm_check_extension(s, KVM_CAP_MEMORY_ATTRIBUTES);
     kvm_guest_memfd_supported =
         kvm_vm_check_extension(s, KVM_CAP_GUEST_MEMFD) &&
@@ -4231,6 +4246,31 @@ static void kvm_set_device(Object *obj,
     s->device = g_strdup(value);
 }
 
+static void kvm_get_cstate_policy(Object *obj, Visitor *v, const char *name,
+                                  void *opaque, Error **errp)
+{
+    KVMState *s = KVM_STATE(obj);
+    int64_t value = s->cstate_policy;
+
+    visit_type_int(v, name, &value, errp);
+}
+
+static void kvm_set_cstate_policy(Object *obj, Visitor *v, const char *name,
+                                  void *opaque, Error **errp)
+{
+    KVMState *s = KVM_STATE(obj);
+    int64_t value;
+
+    if (!visit_type_int(v, name, &value, errp)) {
+        return;
+    }
+    if (value < -1 || value > 6) {
+        error_setg(errp, "cstate-policy must be between -1 and 6");
+        return;
+    }
+    s->cstate_policy = value;
+}
+
 static void kvm_set_kvm_rapl(Object *obj, bool value, Error **errp)
 {
     KVMState *s = KVM_STATE(obj);
@@ -4265,6 +4305,7 @@ static void kvm_accel_instance_init(Object *obj)
     s->xen_gnttab_max_frames = 64;
     s->xen_evtchn_max_pirq = 256;
     s->device = NULL;
+    s->cstate_policy = -1;
     s->msr_energy.enable = false;
     s->honor_guest_pat = ON_OFF_AUTO_OFF;
 }
@@ -4299,6 +4340,12 @@ static void kvm_accel_class_init(ObjectClass *oc, const void *data)
     object_class_property_add_str(oc, "device", kvm_get_device, kvm_set_device);
     object_class_property_set_description(oc, "device",
         "Path to the device node to use (default: /dev/kvm)");
+
+    object_class_property_add(oc, "cstate-policy", "int",
+        kvm_get_cstate_policy, kvm_set_cstate_policy,
+        NULL, NULL);
+    object_class_property_set_description(oc, "cstate-policy",
+        "Set per-VM max C-state for host cpuidle (-1=disabled, 0-6=max)");
 
     object_class_property_add_bool(oc, "rapl",
                                    NULL,
